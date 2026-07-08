@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import initialSites from '@/data/sites.json'
 import { parseBuildingGeoJSON, parseBoundaryGeoJSON } from '@/lib/geojson'
+import { effectiveHeight, heightSource } from '@/lib/site'
 import { Button } from '@/components/ui/button'
 
 const DEFAULT_HEIGHT = 12
@@ -39,18 +40,19 @@ export function AdminPage() {
   function addBuildings() {
     try {
       const parsed = parseBuildingGeoJSON(buildingText)
-      const withHeights = parsed.map((b) => ({
+      const newBuildings = parsed.map((b) => ({
         footprint: b.footprint,
-        height_m: b.height_m ?? effectiveDefaultHeight,
+        osm_height_m: b.height_m ?? null,
+        override_height_m: null,
       }))
       const fromTags = parsed.filter((b) => b.height_m != null).length
-      updateSite({ buildings: [...site.buildings, ...withHeights] })
+      updateSite({ buildings: [...site.buildings, ...newBuildings] })
       setBuildingText('')
       setMessage({
         kind: 'ok',
-        text: `Added ${withHeights.length} building(s) — ${fromTags} height(s) from OSM tags, ${
-          withHeights.length - fromTags
-        } using this site's default (${effectiveDefaultHeight} m). Remember to Save.`,
+        text: `Added ${newBuildings.length} building(s) — ${fromTags} height(s) from OSM tags, ${
+          newBuildings.length - fromTags
+        } following this site's default (${effectiveDefaultHeight} m). Remember to Save.`,
       })
     } catch (err) {
       setMessage({ kind: 'error', text: err.message })
@@ -72,10 +74,14 @@ export function AdminPage() {
     updateSite({ buildings: site.buildings.filter((_, i) => i !== index) })
   }
 
-  function setBuildingHeight(index, height) {
+  // Typing a height pins that building (manual override). Clearing the field
+  // removes the pin, so the building falls back to its OSM height or the site
+  // default again.
+  function setBuildingOverride(index, value) {
+    const override = value === '' ? null : Number(value)
     updateSite({
       buildings: site.buildings.map((b, i) =>
-        i === index ? { ...b, height_m: height === '' ? '' : Number(height) } : b
+        i === index ? { ...b, override_height_m: override } : b
       ),
     })
   }
@@ -294,28 +300,31 @@ export function AdminPage() {
 
             {site.buildings.length > 0 && (
               <ul className="mt-4 divide-y divide-slate-100 border-t border-slate-100">
-                {site.buildings.map((b, i) => (
-                  <li key={i} className="flex items-center gap-3 py-2 text-sm">
-                    <span className="w-8 text-slate-400">#{i + 1}</span>
-                    <span className="flex-1 text-slate-600">
-                      {b.footprint.coordinates[0].length - 1} corner polygon
-                    </span>
-                    <label className="flex items-center gap-1 text-slate-600">
-                      height
-                      <input
-                        className="input w-20"
-                        type="number"
-                        step="0.1"
-                        value={b.height_m}
-                        onChange={(e) => setBuildingHeight(i, e.target.value)}
-                      />
-                      m
-                    </label>
-                    <Button variant="ghost" size="sm" onClick={() => removeBuilding(i)}>
-                      remove
-                    </Button>
-                  </li>
-                ))}
+                {site.buildings.map((b, i) => {
+                  const source = heightSource(b)
+                  return (
+                    <li key={i} className="flex items-center gap-3 py-2 text-sm">
+                      <span className="w-8 text-slate-400">#{i + 1}</span>
+                      <span className="flex-1 text-slate-600">
+                        {b.footprint.coordinates[0].length - 1} corner polygon
+                      </span>
+                      <HeightBadge source={source} />
+                      <label className="flex items-center gap-1 text-slate-600">
+                        <input
+                          className="input w-20"
+                          type="number"
+                          step="0.1"
+                          value={effectiveHeight(b, site)}
+                          onChange={(e) => setBuildingOverride(i, e.target.value)}
+                        />
+                        m
+                      </label>
+                      <Button variant="ghost" size="sm" onClick={() => removeBuilding(i)}>
+                        remove
+                      </Button>
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </section>
@@ -331,5 +340,20 @@ function Field({ label, children, className = '' }) {
       <span className="mb-1 block text-slate-600">{label}</span>
       {children}
     </label>
+  )
+}
+
+const HEIGHT_BADGES = {
+  osm: { label: 'OSM', className: 'bg-green-100 text-green-700' },
+  default: { label: 'default', className: 'bg-slate-100 text-slate-500' },
+  manual: { label: 'pinned', className: 'bg-blue-100 text-blue-700' },
+}
+
+function HeightBadge({ source }) {
+  const badge = HEIGHT_BADGES[source] ?? HEIGHT_BADGES.default
+  return (
+    <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${badge.className}`}>
+      {badge.label}
+    </span>
   )
 }

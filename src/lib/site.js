@@ -2,6 +2,29 @@ import { createProjector } from './geo'
 
 const FALLBACK_HEIGHT = 9
 
+// A building's height comes from, in priority order: a manual pin
+// (override_height_m), then the height fetched from OSM (osm_height_m), then
+// the site's live default (default_height_m). This keeps the "live default"
+// behaviour: buildings with no OSM height follow the site default until pinned.
+export function effectiveHeight(building, site, fallback = FALLBACK_HEIGHT) {
+  const override = building.override_height_m
+  if (typeof override === 'number' && override > 0) return override
+  const osm = building.osm_height_m
+  if (typeof osm === 'number' && osm > 0) return osm
+  const dflt = site?.default_height_m
+  if (typeof dflt === 'number' && dflt > 0) return dflt
+  return fallback
+}
+
+// Where the effective height came from — used to label rows in the admin list.
+export function heightSource(building) {
+  const override = building.override_height_m
+  if (typeof override === 'number' && override > 0) return 'manual'
+  const osm = building.osm_height_m
+  if (typeof osm === 'number' && osm > 0) return 'osm'
+  return 'default'
+}
+
 // Converts one raw site from sites.json into local-meter geometry that the
 // 3D viewer can render directly: buildings as { footprint:[{x,z}], height },
 // the plaza boundary as [{x,z}], plus framing metrics (centroid + radii) and
@@ -21,10 +44,7 @@ export function projectSite(site) {
     if (!ring || ring.length < 4) continue
     const footprint = ringToLocal(projector, ring)
     if (footprint.length < 3) continue
-    buildings.push({
-      footprint,
-      height: typeof b.height_m === 'number' && b.height_m > 0 ? b.height_m : FALLBACK_HEIGHT,
-    })
+    buildings.push({ footprint, height: effectiveHeight(b, site) })
   }
 
   let boundary = null
