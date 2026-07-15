@@ -20,6 +20,12 @@ Tech stack: React + Three.js for the 3D viewer; backend architecture for survey 
 
 ---
 
+## Design System
+
+The frontend carries a "drafting instrument" visual identity, established via `/impeccable init` — see [PRODUCT.md](../PRODUCT.md) for the full brief. White paper surfaces, deep indigo as the brand/technical-pen color, redline red reserved for markup (viewpoint marker, warnings, wall hits), IBM Plex Sans/Mono typography. Every subsequent phase's UI (survey, results dashboard) should extend this system rather than introduce new visual language — keep the researcher's dense working surfaces and the single-task participant survey feeling like the same family at different densities.
+
+---
+
 ## PHASE 1 — Data Model & Site Setup
 
 Foundational data structure, no computation.
