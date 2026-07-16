@@ -1,12 +1,17 @@
 import { useMemo } from 'react'
 import * as THREE from 'three'
 
-// Renders the live output of castIsovist(): a flat teal polygon for the
+// Renders the live output of castIsovist(): a flat orange polygon for the
 // visible area (vantage point + ray endpoints, matching the fan used for the
-// Area/Perimeter/Compactness/Occlusivity formulas), plus an amber ribbon that
+// Area/Perimeter/Compactness/Occlusivity formulas), plus a redline ribbon that
 // rises from the ground to each hit building's height along wall-hit rays,
 // breaking wherever a ray is "open" (reaches 200m with no obstacle).
-export function IsovistOverlay({ result }) {
+//
+// `dim` renders a saved point's projection faintly, so several can be overlaid
+// at once without drowning out the live (active) one.
+export function IsovistOverlay({ result, dim = false }) {
+  const isovistOpacity = dim ? 0.12 : 0.28
+  const ribbonOpacity = dim ? 0.18 : 0.4
   const isovistGeometry = useMemo(() => {
     if (!result || result.rays.length < 2) return null
     const { vantage, rays } = result
@@ -55,9 +60,9 @@ export function IsovistOverlay({ result }) {
       {isovistGeometry && (
         <mesh geometry={isovistGeometry}>
           <meshBasicMaterial
-            color="#5748b8"
+            color="#ea580c"
             transparent
-            opacity={0.28}
+            opacity={isovistOpacity}
             side={THREE.DoubleSide}
             depthWrite={false}
           />
@@ -66,9 +71,9 @@ export function IsovistOverlay({ result }) {
       {ribbonGeometry && (
         <mesh geometry={ribbonGeometry}>
           <meshBasicMaterial
-            color="#c04030"
+            color="#b91c1c"
             transparent
-            opacity={0.4}
+            opacity={ribbonOpacity}
             side={THREE.DoubleSide}
             depthWrite={false}
           />

@@ -1,43 +1,50 @@
-/* IBM Plex — one technical superfamily: Sans for UI, Mono for data/coordinates */
-@import '@fontsource/ibm-plex-sans/400.css';
-@import '@fontsource/ibm-plex-sans/500.css';
-@import '@fontsource/ibm-plex-sans/600.css';
-@import '@fontsource/ibm-plex-mono/400.css';
-@import '@fontsource/ibm-plex-mono/500.css';
+/* Inter for UI text, JetBrains Mono for data/coordinates/labels —
+   per the environment-settings design reference. */
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+@import '@fontsource/jetbrains-mono/600.css';
 
 @import "tailwindcss";
 
 /*
- * Design tokens — "drafting instrument" system.
- * White paper surfaces, violet-black ink, deep indigo as the technical-pen
- * brand color, red reserved for redline markup (viewpoints, warnings, walls).
+ * Design tokens — warm-paper drafting system (environment-settings palette).
+ * Cream paper surfaces (#F4F2EC / #EAE6DB), near-black ink, orange as the
+ * technical-pen brand color. The reference's #F97316/#EA580C orange is kept
+ * for graphic accents (--color-accent, washes); text and buttons use a darker
+ * cut of the same hue (--color-primary) so every orange-on-paper pairing
+ * stays ≥4.5:1 readable.
  * All colors OKLCH; Tailwind v4 turns each --color-* into utilities
  * (bg-surface, text-ink, border-line, …).
  */
 @theme {
-  --color-bg: oklch(1 0 0);
-  --color-surface: oklch(0.973 0.004 285);
-  --color-ink: oklch(0.24 0.018 285);
-  --color-ink-muted: oklch(0.44 0.022 285);
-  --color-ink-faint: oklch(0.55 0.02 285);
-  --color-line: oklch(0.885 0.008 285);
-  --color-line-strong: oklch(0.76 0.014 285);
+  --color-bg: oklch(0.958 0.007 91);          /* #F4F2EC page background */
+  --color-paper: oklch(0.988 0.003 91);       /* near-white: inputs, floating panels, cards */
+  --color-surface: oklch(0.925 0.011 92);     /* #EAE6DB second neutral: sidebars, wells */
+  --color-ink: oklch(0.21 0.034 265);         /* #111827 */
+  --color-ink-muted: oklch(0.446 0.043 257);  /* #4B5563 */
+  --color-ink-faint: oklch(0.49 0.033 260);
+  --color-line: oklch(0.888 0.013 91);        /* #DFD9CE */
+  --color-line-strong: oklch(0.79 0.018 91);
 
-  --color-primary: oklch(0.42 0.155 285);
-  --color-primary-deep: oklch(0.34 0.14 285);
-  --color-primary-wash: oklch(0.955 0.022 285);
+  --color-primary: oklch(0.54 0.19 38);       /* AA-safe orange: text, buttons */
+  --color-primary-deep: oklch(0.47 0.157 37); /* hover */
+  --color-primary-wash: oklch(0.945 0.033 62);
+  --color-accent: oklch(0.646 0.222 41);      /* #EA580C graphic accents: bars, rings, underlines */
 
-  --color-redline: oklch(0.5 0.185 27);
-  --color-redline-wash: oklch(0.96 0.02 27);
+  --color-redline: oklch(0.505 0.213 28);     /* markup red: walls, live viewpoint, errors */
+  --color-redline-wash: oklch(0.955 0.02 25);
 
-  --color-ok: oklch(0.48 0.115 152);
-  --color-ok-wash: oklch(0.962 0.028 152);
+  --color-ok: oklch(0.51 0.14 151);
+  --color-ok-wash: oklch(0.96 0.03 152);
 
-  --color-warn: oklch(0.5 0.105 65);
-  --color-warn-wash: oklch(0.965 0.03 80);
+  --color-warn: oklch(0.47 0.09 70);          /* bronze, kept dull so it never reads as brand orange */
+  --color-warn-wash: oklch(0.955 0.028 82);
 
-  --font-sans: 'IBM Plex Sans', system-ui, 'Segoe UI', sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', monospace;
+  --font-sans: 'Inter', system-ui, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', monospace;
 }
 
 :root {
@@ -60,7 +67,7 @@ html, body, #root {
 }
 
 .input {
-  @apply rounded border border-line-strong bg-bg px-2 py-1.5 text-sm text-ink outline-none transition-colors duration-150 placeholder:text-ink-faint focus:border-primary focus:ring-2 focus:ring-primary-wash;
+  @apply rounded-lg border border-line-strong bg-paper px-2.5 py-1.5 text-sm text-ink outline-none transition-colors duration-150 placeholder:text-ink-faint focus:border-primary focus:ring-2 focus:ring-primary-wash;
 }
 
 @media (prefers-reduced-motion: reduce) {

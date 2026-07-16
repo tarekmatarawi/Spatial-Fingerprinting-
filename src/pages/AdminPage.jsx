@@ -6,6 +6,18 @@ import { Button } from '@/components/ui/button'
 
 const DEFAULT_HEIGHT = 12
 
+// German-aware transliteration (ö→oe, ü→ue, ä→ae, ß→ss) so umlauts survive as
+// readable ASCII instead of silently vanishing — several site ids (e.g.
+// "Römerberg", "Königsplatz", "Düsseldorf") have them.
+const UMLAUTS = { ä: 'ae', ö: 'oe', ü: 'ue', Ä: 'Ae', Ö: 'Oe', Ü: 'Ue', ß: 'ss' }
+function slugify(text) {
+  const transliterated = text.replace(/[äöüÄÖÜß]/g, (ch) => UMLAUTS[ch])
+  return transliterated
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
 // Data-entry page for the 18 sites: paste OSM GeoJSON footprints and a height
 // value per building. Saving writes back to src/data/sites.json via the dev
 // server; on the deployed static site it falls back to downloading the file.
@@ -16,6 +28,7 @@ export function AdminPage() {
   const [boundaryText, setBoundaryText] = useState('')
   const [message, setMessage] = useState(null)
   const [dirty, setDirty] = useState(false)
+  const [imageUpload, setImageUpload] = useState({ status: 'idle', error: null }) // idle | uploading | error
 
   const site = sites[selectedIndex]
 
@@ -35,6 +48,40 @@ export function AdminPage() {
     setBuildingText('')
     setBoundaryText('')
     setMessage(null)
+    setImageUpload({ status: 'idle', error: null })
+  }
+
+  // Uploads a screenshot picked from anywhere on disk to public/images/ via the
+  // dev-only endpoint, then fills in the site's street_view_image path. Falls
+  // back to a clear inline error on the deployed static site, where the
+  // endpoint doesn't exist (same pattern as saving site data).
+  async function uploadImage(file) {
+    const ext = (file.name.match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase()
+    if (!['jpg', 'jpeg', 'png', 'webp'].includes(ext)) {
+      setImageUpload({ status: 'error', error: 'Use a JPG, PNG, or WEBP image.' })
+      return
+    }
+    const filename = `${slugify(site.id)}.${ext}`
+    setImageUpload({ status: 'uploading', error: null })
+    try {
+      const response = await fetch('/__upload-image', {
+        method: 'POST',
+        headers: { 'x-filename': filename, 'Content-Type': 'application/octet-stream' },
+        body: file,
+      })
+      const result = await response.json()
+      if (!response.ok || !result.ok) throw new Error(result.error || `Upload failed (${response.status})`)
+      updateSite({ street_view_image: result.path })
+      setImageUpload({ status: 'idle', error: null })
+    } catch (err) {
+      setImageUpload({
+        status: 'error',
+        error:
+          err instanceof TypeError
+            ? 'Upload only works when running locally (npm run dev).'
+            : err.message,
+      })
+    }
   }
 
   function addBuildings() {
@@ -113,12 +160,12 @@ export function AdminPage() {
   }
 
   return (
-    <div className="flex h-full overflow-hidden bg-bg text-ink">
-      {/* Site register */}
-      <aside className="w-72 shrink-0 overflow-y-auto border-r border-line bg-surface">
+    <div className="flex h-full flex-col overflow-hidden bg-bg text-ink md:flex-row">
+      {/* Site register — full sidebar on desktop, a capped scrollable strip on phones */}
+      <aside className="max-h-44 w-full shrink-0 overflow-y-auto border-b border-line bg-surface md:max-h-none md:w-72 md:border-b-0 md:border-r">
         <div className="border-b border-line px-4 py-3.5">
           <h2 className="text-sm font-semibold">Site register</h2>
-          <p className="mt-0.5 font-mono text-[11px] text-ink-muted">
+          <p className="mt-0.5 font-mono text-xs text-ink-muted">
             {sites.length} sites · ✓ boundary set
           </p>
         </div>
@@ -137,7 +184,7 @@ export function AdminPage() {
                   {s.name || s.id}
                 </span>
                 <span
-                  className={`font-mono text-[11px] ${
+                  className={`font-mono text-xs ${
                     i === selectedIndex ? 'text-primary' : 'text-ink-muted'
                   }`}
                 >
@@ -151,12 +198,12 @@ export function AdminPage() {
       </aside>
 
       {/* Editor */}
-      <main className="flex-1 overflow-y-auto px-8 py-6">
+      <main className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
         <div className="mx-auto max-w-3xl space-y-8">
-          <div className="flex items-center justify-between border-b border-line-strong pb-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line-strong pb-4">
             <div>
               <h1 className="text-xl font-semibold tracking-tight">{site.name || site.id}</h1>
-              <p className="mt-0.5 font-mono text-[11px] text-ink-muted">
+              <p className="mt-0.5 font-mono text-xs text-ink-muted">
                 {site.city || '—'}
                 {site.country ? `, ${site.country}` : ''} · {site.buildings.length} building
                 {site.buildings.length === 1 ? '' : 's'}
@@ -171,7 +218,7 @@ export function AdminPage() {
 
           {message && (
             <div
-              className={`rounded border p-3 text-sm ${
+              className={`rounded-lg border p-3 text-sm ${
                 message.kind === 'error'
                   ? 'border-redline/30 bg-redline-wash text-redline'
                   : 'border-ok/30 bg-ok-wash text-ok'
@@ -184,7 +231,7 @@ export function AdminPage() {
           {/* Metadata */}
           <section>
             <SectionHeading>Site info</SectionHeading>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Field label="ID (URL-safe, e.g. gendarmenmarkt-berlin)">
                 <input
                   className="input"
@@ -247,12 +294,53 @@ export function AdminPage() {
                   }
                 />
               </Field>
-              <Field label="Street view image path" className="col-span-2">
-                <input
-                  className="input"
-                  value={site.street_view_image ?? ''}
-                  onChange={(e) => updateSite({ street_view_image: e.target.value })}
-                />
+              <Field label="Street view image" className="sm:col-span-2">
+                <div className="flex items-start gap-3">
+                  {site.street_view_image ? (
+                    <img
+                      key={site.street_view_image}
+                      src={`${import.meta.env.BASE_URL}${site.street_view_image.replace(/^\//, '')}`}
+                      alt=""
+                      className="h-16 w-24 shrink-0 rounded border border-line-strong object-cover"
+                      onError={(e) => (e.currentTarget.style.visibility = 'hidden')}
+                    />
+                  ) : (
+                    <div className="flex h-16 w-24 shrink-0 items-center justify-center rounded border border-dashed border-line-strong text-[10px] text-ink-faint">
+                      No image
+                    </div>
+                  )}
+
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <label className="cursor-pointer rounded-full border border-line-strong bg-paper px-3 py-1.5 text-xs font-medium text-ink shadow-sm transition-colors duration-150 hover:border-primary hover:text-primary-deep">
+                        {imageUpload.status === 'uploading' ? 'Uploading…' : 'Choose file…'}
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp"
+                          className="sr-only"
+                          disabled={imageUpload.status === 'uploading'}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0]
+                            e.target.value = ''
+                            if (file) uploadImage(file)
+                          }}
+                        />
+                      </label>
+                      {imageUpload.status === 'idle' && site.street_view_image && (
+                        <span className="truncate font-mono text-xs text-ink-faint">
+                          {site.street_view_image}
+                        </span>
+                      )}
+                    </div>
+                    {imageUpload.error && <p className="text-xs text-warn">{imageUpload.error}</p>}
+                    <input
+                      className="input font-mono text-xs"
+                      placeholder="or type a path manually, e.g. /images/site-01.jpg"
+                      value={site.street_view_image ?? ''}
+                      onChange={(e) => updateSite({ street_view_image: e.target.value })}
+                    />
+                  </div>
+                </div>
               </Field>
             </div>
           </section>
@@ -307,7 +395,7 @@ export function AdminPage() {
               value={buildingText}
               onChange={(e) => setBuildingText(e.target.value)}
             />
-            <div className="mt-2 flex items-center gap-3">
+            <div className="mt-2 flex flex-wrap items-center gap-3">
               <label className="flex items-center gap-2 text-sm text-ink-muted">
                 Default height for this site (m)
                 <input
@@ -333,9 +421,9 @@ export function AdminPage() {
                 {site.buildings.map((b, i) => {
                   const source = heightSource(b)
                   return (
-                    <li key={i} className="flex items-center gap-3 py-2 text-sm">
+                    <li key={i} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2 text-sm">
                       <span className="w-8 font-mono text-xs text-ink-faint">{i + 1}</span>
-                      <span className="flex-1 text-ink-muted">
+                      <span className="min-w-32 flex-1 text-ink-muted">
                         {b.footprint.coordinates[0].length - 1} corner polygon
                       </span>
                       <HeightBadge source={source} />
@@ -392,7 +480,7 @@ const HEIGHT_BADGES = {
 function HeightBadge({ source }) {
   const badge = HEIGHT_BADGES[source] ?? HEIGHT_BADGES.default
   return (
-    <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${badge.className}`}>
+    <span className={`rounded-full px-2 py-0.5 font-mono text-[11px] font-medium uppercase ${badge.className}`}>
       {badge.label}
     </span>
   )

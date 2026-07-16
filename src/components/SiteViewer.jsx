@@ -3,6 +3,8 @@ import { Canvas, useThree, useFrame } from '@react-three/fiber'
 import { OrbitControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei'
 import * as THREE from 'three'
 import sites from '@/data/sites.json'
+import savedResults from '@/data/results.json'
+import storedViewerState from '@/data/viewer-state.json'
 import { projectSite, pointInPolygon } from '@/lib/site'
 import { castIsovist, bearingTo } from '@/lib/isovist'
 import { Buildings } from './Buildings'
@@ -15,39 +17,98 @@ import { IsovistOverlay } from './IsovistOverlay'
 const UP = [0, 0, 1]
 
 // Scene palette — hex approximations of the OKLCH design tokens in index.css
-// (Three.js doesn't parse oklch() strings). The scene reads as a white
-// museum-board model: paper ground, ink lines, indigo isovist, redline marker.
+// (Three.js doesn't parse oklch() strings). The scene reads as a warm
+// museum-board model: cream ground, ink lines, orange isovist, redline marker.
 const SCENE = {
-  paper: '#ffffff',
-  gridCell: '#e6e6ee',
-  gridSection: '#cbcbd9',
-  plazaWash: '#6a5cc4',
-  isovist: '#5748b8',
-  wallRibbon: '#c04030',
-  markerInside: '#c04030',
-  markerOutside: '#8b8b9c',
-  arrowInk: '#22223a',
+  paper: '#f4f2ec',
+  gridCell: '#e4e0d3',
+  gridSection: '#cbc5b5',
+  plazaWash: '#f97316',
+  isovist: '#ea580c',
+  wallRibbon: '#b91c1c',
+  markerInside: '#b91c1c',
+  markerOutside: '#98928a',
+  markerSaved: '#c2410c',
+  arrowInk: '#292524',
 }
 
-// Reference metrics from the original Grasshopper/Decoding Spaces computation
-// for Gendarmenmarkt, used only as a rough sanity check on this site (see
-// spec Phase 3) — the exact original vantage point/direction weren't logged,
-// so this is a soft check, not a strict pass/fail gate.
-const GENDARMENMARKT_REFERENCE = {
-  siteId: 'Gendarmenmarkt-Berlin',
-  area: 12437.877366,
-  compactness: 0.269934,
-  occlusivity: 354.097561,
-  enclosureRatio: 0.330407,
+const DEFAULT_STATE = { selectedId: sites[0]?.id, pick: null, direction: null, stage: 'vantage' }
+
+// Shared validation for a restored viewer state, from whatever source (URL query
+// or the persisted viewer-state.json). Only the site id and raw x/y/dir numbers
+// are trusted: lat/lon and inside/outside are always recomputed from the
+// projected site, and anything missing or malformed degrades to just the site
+// (or the defaults, if the id is unknown).
+function buildViewerState(siteId, rawX, rawY, rawDir) {
+  const site = sites.find((s) => s.id === siteId)
+  if (!site) return { ...DEFAULT_STATE }
+
+  const state = { selectedId: site.id, pick: null, direction: null, stage: 'vantage' }
+
+  const x = parseFloat(rawX)
+  const y = parseFloat(rawY)
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return state
+
+  try {
+    const data = projectSite(site)
+    const point = { x, y }
+    const inside = data.boundary ? pointInPolygon(point, data.boundary) : true
+    const { lat, lon } = data.toLatLon(x, y)
+    state.pick = { point, inside, lat, lon }
+    if (inside) {
+      const dir = parseFloat(rawDir)
+      if (Number.isFinite(dir)) {
+        state.direction = (dir * Math.PI) / 180
+        state.stage = 'aim'
+      }
+    }
+  } catch {
+    // Site geometry couldn't be projected — keep just the selected site.
+  }
+  return state
+}
+
+// URL query state, or null when no known site is named there.
+// URLSearchParams already percent-decodes, so the space-bearing ids match.
+function readUrlState() {
+  const params = new URLSearchParams(window.location.search)
+  const siteId = params.get('site')
+  if (!siteId || !sites.some((s) => s.id === siteId)) return null
+  return buildViewerState(siteId, params.get('x'), params.get('y'), params.get('dir'))
+}
+
+// Persisted state from viewer-state.json, or null when it names no known site.
+function readStoredState() {
+  const s = storedViewerState
+  if (!s || typeof s !== 'object' || !sites.some((site) => site.id === s.site_id)) return null
+  return buildViewerState(s.site_id, s.x, s.y, s.dir_deg)
+}
+
+// Restore precedence: an explicit URL link wins, then the last persisted state,
+// then defaults (first site, no pick).
+function readInitialState() {
+  return readUrlState() ?? readStoredState() ?? { ...DEFAULT_STATE }
 }
 
 export function SiteViewer() {
-  const [selectedId, setSelectedId] = useState(sites[0]?.id)
-  const [pick, setPick] = useState(null)
-  const [direction, setDirection] = useState(null) // compass bearing, radians (0 = north, clockwise)
-  const [stage, setStage] = useState('vantage') // 'vantage' = next click sets viewpoint, 'aim' = next click sets facing direction
+  // Restore the last viewer state once (URL query first, then the persisted
+  // viewer-state.json), so a shared link, a refresh, or a brand-new tab all
+  // reopen on the same plaza/viewpoint. Computed once, reused as lazy state below.
+  const initialRef = useRef(null)
+  if (initialRef.current === null) initialRef.current = readInitialState()
+  const initial = initialRef.current
+
+  const [selectedId, setSelectedId] = useState(initial.selectedId)
+  const [pick, setPick] = useState(initial.pick)
+  const [direction, setDirection] = useState(initial.direction) // compass bearing, radians (0 = north, clockwise)
+  const [stage, setStage] = useState(initial.stage) // 'vantage' = next click sets viewpoint, 'aim' = next click sets facing direction
   const [resetToken, setResetToken] = useState(0)
+  const [results, setResults] = useState(savedResults) // saved isovist readings, seeded from src/data/results.json
+  const [saveError, setSaveError] = useState(null)
+  const [showSavedProjections, setShowSavedProjections] = useState(false) // overlay saved points' isovists faintly
   const compassRef = useRef(null)
+  const pendingLoadRef = useRef(null) // a saved entry to restore after a site switch settles
+  const prevSiteRef = useRef(null) // last selectedId the effect below acted on; lets it clear only on real site changes
 
   const site = useMemo(() => sites.find((s) => s.id === selectedId) ?? sites[0], [selectedId])
 
@@ -60,10 +121,56 @@ export function SiteViewer() {
   }, [site])
 
   useEffect(() => {
-    setPick(null)
-    setDirection(null)
-    setStage('vantage')
+    // Only react to a real site change. On mount (including StrictMode's
+    // double-run in dev) the state already reflects the URL restore, and
+    // clearing it here would wipe the restored viewpoint.
+    if (prevSiteRef.current === null) prevSiteRef.current = selectedId
+    if (prevSiteRef.current === selectedId) return
+    prevSiteRef.current = selectedId
+    // A pending Load survives the site switch: restore its viewpoint/direction
+    // once the new site is selected, instead of clearing to a fresh vantage.
+    const pending = pendingLoadRef.current
+    if (pending) {
+      pendingLoadRef.current = null
+      setPick({ point: { x: pending.local_x, y: pending.local_y }, inside: true, lat: pending.lat, lon: pending.lng })
+      setDirection((pending.direction_deg * Math.PI) / 180)
+      setStage('aim')
+    } else {
+      setPick(null)
+      setDirection(null)
+      setStage('vantage')
+    }
   }, [selectedId])
+
+  // Mirror the current viewer state to both persistence layers whenever it
+  // changes (select, place, aim/re-aim, Move viewpoint, Load-from-saved, or a
+  // cleared pick): the URL query (via replaceState, so history isn't spammed)
+  // for shared/deployed use, and the dev-only backend so a fresh tab restores.
+  // With no pick we keep just the site; a pick adds x/y, an aimed pick adds dir.
+  useEffect(() => {
+    const params = [`site=${encodeURIComponent(selectedId)}`]
+    const payload = { site_id: selectedId }
+    if (pick) {
+      const x = round(pick.point.x, 2)
+      const y = round(pick.point.y, 2)
+      params.push(`x=${x}`, `y=${y}`)
+      payload.x = x
+      payload.y = y
+      if (direction != null) {
+        const dir = round(((direction * 180) / Math.PI + 360) % 360, 1)
+        params.push(`dir=${dir}`)
+        payload.dir_deg = dir
+      }
+    }
+    window.history.replaceState(null, '', `?${params.join('&')}${window.location.hash}`)
+    // Fire-and-forget: the endpoint is absent on the deployed static site, where
+    // the URL query already carries the state, so failures are silently ignored.
+    fetch('/__save-viewer-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch(() => {})
+  }, [selectedId, pick, direction])
 
   function handlePick(point) {
     const data = projected.data
@@ -103,6 +210,82 @@ export function SiteViewer() {
     return castIsovist(pick.point, direction, data.buildings)
   }, [data, pick, direction])
 
+  // Every saved reading that belongs to the current plaza, drawn as a persistent
+  // marker in the scene so all of a site's saved vantage points stay visible
+  // (and clickable to reload) after switching sites or refreshing.
+  const savedForSite = useMemo(
+    () => results.filter((r) => r.site_id === selectedId),
+    [results, selectedId]
+  )
+
+  // Recompute each saved point's isovist so its projection can be overlaid
+  // faintly (behind the toggle below) alongside the live one — lets several
+  // saved viewpoints be compared at once.
+  const savedProjections = useMemo(() => {
+    if (!data || !showSavedProjections) return []
+    return savedForSite.map((r) => ({
+      id: r.id,
+      result: castIsovist({ x: r.local_x, y: r.local_y }, (r.direction_deg * Math.PI) / 180, data.buildings),
+    }))
+  }, [data, savedForSite, showSavedProjections])
+
+  // Sends the whole results array to the dev-only /__save-results endpoint,
+  // updating React state first so the panel reacts immediately. On the deployed
+  // static site the endpoint is absent, so we keep the entry in-session and show
+  // a friendly "local only" note instead of crashing.
+  async function persistResults(next) {
+    setResults(next)
+    try {
+      const response = await fetch('/__save-results', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(next),
+      })
+      if (!response.ok) throw new Error(`save endpoint returned ${response.status}`)
+      setSaveError(null)
+    } catch {
+      setSaveError('Saving only works when running locally (npm run dev).')
+    }
+  }
+
+  function handleSaveResult() {
+    if (!isovistResult || !pick?.inside || direction == null) return
+    const record = {
+      id: crypto.randomUUID(),
+      site_id: site.id,
+      site_name: site.name,
+      lat: round(pick.lat, 6),
+      lng: round(pick.lon, 6),
+      local_x: round(pick.point.x, 2),
+      local_y: round(pick.point.y, 2),
+      direction_deg: round(((direction * 180) / Math.PI + 360) % 360, 1),
+      area_m2: round(isovistResult.area, 2),
+      compactness: round(isovistResult.compactness, 4),
+      occlusivity_m: round(isovistResult.occlusivity, 2),
+      enclosure_ratio: round(isovistResult.enclosureRatio, 4),
+      saved_at: new Date().toISOString(),
+    }
+    persistResults([...results, record])
+  }
+
+  function handleDelete(id) {
+    persistResults(results.filter((r) => r.id !== id))
+  }
+
+  // Restores a saved reading onto the viewer. If it belongs to another plaza we
+  // switch sites first and let the selectedId effect apply it once the new
+  // geometry is ready; same-site entries can be applied straight away.
+  function handleLoad(entry) {
+    if (entry.site_id !== selectedId) {
+      pendingLoadRef.current = entry
+      setSelectedId(entry.site_id)
+      return
+    }
+    setPick({ point: { x: entry.local_x, y: entry.local_y }, inside: true, lat: entry.lat, lon: entry.lng })
+    setDirection((entry.direction_deg * Math.PI) / 180)
+    setStage('aim')
+  }
+
   return (
     <div className="relative h-full w-full">
       <Canvas
@@ -110,7 +293,7 @@ export function SiteViewer() {
         camera={{ up: UP, position: [0, -120, 120], fov: 45, near: 0.5, far: 8000 }}
         style={{ background: SCENE.paper }}
       >
-        <hemisphereLight args={['#ffffff', '#e8e8ef', 1.0]} />
+        <hemisphereLight args={['#ffffff', '#eae6db', 1.0]} />
         <directionalLight position={[180, -160, 400]} intensity={1.3} />
         <directionalLight position={[-140, 120, 220]} intensity={0.35} />
 
@@ -146,7 +329,22 @@ export function SiteViewer() {
 
             <Buildings buildings={data.buildings} />
 
+            {savedProjections.map((p) => (
+              <IsovistOverlay key={p.id} result={p.result} dim />
+            ))}
+
             {isovistResult && <IsovistOverlay result={isovistResult} />}
+
+            {savedForSite.map((r) => (
+              <Marker
+                key={r.id}
+                point={{ x: r.local_x, y: r.local_y }}
+                inside
+                direction={(r.direction_deg * Math.PI) / 180}
+                variant="saved"
+                onSelect={() => handleLoad(r)}
+              />
+            ))}
 
             {pick && (
               <Marker
@@ -173,7 +371,7 @@ export function SiteViewer() {
         />
 
         <GizmoHelper alignment="bottom-right" margin={[80, 80]}>
-          <GizmoViewport axisColors={['#c04030', '#3f8a52', '#4b3daa']} labelColor="#3c3c52" />
+          <GizmoViewport axisColors={['#b91c1c', '#3f8a52', '#c2410c']} labelColor="#44403c" />
         </GizmoHelper>
       </Canvas>
 
@@ -191,6 +389,17 @@ export function SiteViewer() {
         direction={direction}
         result={isovistResult}
         onMoveViewpoint={() => setStage('vantage')}
+        onSaveResult={handleSaveResult}
+        saveError={saveError}
+        savedCount={savedForSite.length}
+        showSavedProjections={showSavedProjections}
+        onToggleSavedProjections={() => setShowSavedProjections((v) => !v)}
+      />
+
+      <SavedResultsPanel
+        results={results}
+        onDelete={handleDelete}
+        onLoad={handleLoad}
       />
     </div>
   )
@@ -267,14 +476,32 @@ const ARROW_GEOMETRY = new THREE.ShapeGeometry(ARROW_SHAPE)
 // The picked viewpoint: a sphere at ~eye height on a thin pole up the +Z axis,
 // plus a flat arrow lying on the ground pointing along the chosen viewing
 // direction (bearing in radians, 0 = north/+Y, clockwise).
-function Marker({ point, inside, direction }) {
-  const color = inside ? SCENE.markerInside : SCENE.markerOutside
+// A vantage-point marker. The 'live' variant (default) is the redline point the
+// user is actively placing; the 'saved' variant is a filed reading for this
+// site — indigo, slightly smaller, and clickable to reload it onto the viewer.
+function Marker({ point, inside, direction, variant = 'live', onSelect }) {
+  const saved = variant === 'saved'
+  const color = saved ? SCENE.markerSaved : inside ? SCENE.markerInside : SCENE.markerOutside
+  const scale = saved ? 0.72 : 1
   // The arrow shape points +Y (north) by default; rotating around Z by
   // -direction turns it to match a clockwise-from-north compass bearing.
   const rotationZ = direction != null ? -direction : 0
 
   return (
-    <group position={[point.x, point.y, 0]}>
+    <group
+      position={[point.x, point.y, 0]}
+      scale={scale}
+      onClick={
+        onSelect
+          ? (e) => {
+              e.stopPropagation()
+              onSelect()
+            }
+          : undefined
+      }
+      onPointerOver={onSelect ? (e) => (e.stopPropagation(), (document.body.style.cursor = 'pointer')) : undefined}
+      onPointerOut={onSelect ? () => (document.body.style.cursor = 'default') : undefined}
+    >
       <mesh position={[0, 0, 0.8]} rotation={[Math.PI / 2, 0, 0]}>
         <cylinderGeometry args={[0.25, 0.25, 1.6, 12]} />
         <meshStandardMaterial color={color} />
@@ -285,7 +512,7 @@ function Marker({ point, inside, direction }) {
       </mesh>
       {direction != null && (
         <mesh geometry={ARROW_GEOMETRY} position={[0, 0, 0.08]} rotation={[0, 0, rotationZ]}>
-          <meshBasicMaterial color={SCENE.arrowInk} side={THREE.DoubleSide} />
+          <meshBasicMaterial color={saved ? color : SCENE.arrowInk} side={THREE.DoubleSide} />
         </mesh>
       )}
     </group>
@@ -311,7 +538,7 @@ function CompassUpdater({ arrowRef }) {
 
 const Compass = ({ ref, onReorient }) => (
   <div className="absolute top-4 right-4 flex flex-col items-center gap-2">
-    <div className="relative h-16 w-16 rounded-full border border-line-strong bg-bg/95 shadow-sm">
+    <div className="relative h-16 w-16 rounded-full border border-line-strong bg-paper/95 shadow-sm">
       <div ref={ref} className="absolute inset-0">
         <div className="absolute left-1/2 top-1 -translate-x-1/2 font-mono text-xs font-semibold text-redline">
           N
@@ -322,7 +549,7 @@ const Compass = ({ ref, onReorient }) => (
     </div>
     <button
       onClick={onReorient}
-      className="rounded border border-line-strong bg-bg/95 px-2 py-1 text-xs text-ink-muted shadow-sm transition-colors duration-150 hover:border-primary hover:text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary-wash"
+      className="rounded-full border border-line-strong bg-paper/95 px-2.5 py-1 text-xs text-ink-muted shadow-sm transition-colors duration-150 hover:border-primary hover:text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary-wash"
     >
       North-up view
     </button>
@@ -333,13 +560,13 @@ function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v))
 }
 
-function Panel({ sites, selectedId, onSelect, site, data, error, pick, stage, direction, result, onMoveViewpoint }) {
+function Panel({ sites, selectedId, onSelect, site, data, error, pick, stage, direction, result, onMoveViewpoint, onSaveResult, saveError, savedCount, showSavedProjections, onToggleSavedProjections }) {
   const bearingDeg = direction != null ? Math.round(((direction * 180) / Math.PI + 360) % 360) : null
 
   return (
     <div className="pointer-events-none absolute top-4 left-4 w-80 max-w-[calc(100%-2rem)] space-y-3">
-      <div className="pointer-events-auto rounded border border-line bg-bg/95 p-4 shadow-sm backdrop-blur">
-        <label className="mb-1 block font-mono text-[11px] text-ink-muted">Plaza</label>
+      <div className="pointer-events-auto rounded-xl border border-line bg-paper/95 p-4 shadow-sm backdrop-blur">
+        <label className="mb-1 block font-mono text-xs text-ink-muted">Plaza</label>
         <select
           className="input w-full"
           value={selectedId}
@@ -363,7 +590,7 @@ function Panel({ sites, selectedId, onSelect, site, data, error, pick, stage, di
         )}
       </div>
 
-      <div className="pointer-events-auto rounded border border-line bg-bg/95 p-4 text-sm shadow-sm backdrop-blur">
+      <div className="pointer-events-auto rounded-xl border border-line bg-paper/95 p-4 text-sm shadow-sm backdrop-blur">
         <p className="text-ink-muted">
           {stage === 'vantage' ? (
             <>
@@ -378,7 +605,7 @@ function Panel({ sites, selectedId, onSelect, site, data, error, pick, stage, di
           )}
         </p>
         {pick && (
-          <div className="mt-2 rounded bg-surface p-2 font-mono text-xs text-ink">
+          <div className="mt-2 rounded-lg bg-surface p-2.5 font-mono text-xs text-ink">
             {pick.inside ? (
               <>
                 lat {pick.lat.toFixed(6)}, lng {pick.lon.toFixed(6)}
@@ -399,7 +626,7 @@ function Panel({ sites, selectedId, onSelect, site, data, error, pick, stage, di
         {pick?.inside && (
           <button
             onClick={onMoveViewpoint}
-            className="mt-2 rounded border border-line-strong bg-bg px-2 py-1 text-xs text-ink-muted shadow-sm transition-colors duration-150 hover:border-primary hover:text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary-wash"
+            className="mt-2 rounded-full border border-line-strong bg-paper px-2.5 py-1 text-xs text-ink-muted shadow-sm transition-colors duration-150 hover:border-primary hover:text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary-wash"
           >
             Move viewpoint
           </button>
@@ -409,7 +636,43 @@ function Panel({ sites, selectedId, onSelect, site, data, error, pick, stage, di
         </p>
       </div>
 
-      {result && <MetricsPanel result={result} site={site} />}
+      {result && <MetricsPanel result={result} />}
+
+      {result && pick?.inside && direction != null && (
+        <div className="pointer-events-auto rounded-xl border border-line bg-paper/95 p-4 shadow-sm backdrop-blur">
+          <button
+            onClick={onSaveResult}
+            className="w-full rounded-full border border-primary bg-primary-wash px-3 py-2 text-sm font-medium text-primary-deep shadow-sm transition-colors duration-150 hover:bg-primary hover:text-white outline-none focus-visible:ring-2 focus-visible:ring-primary-wash"
+          >
+            Save result
+          </button>
+          {saveError && <p className="mt-2 text-xs text-warn">{saveError}</p>}
+        </div>
+      )}
+
+      {savedCount > 0 && (
+        <label className="pointer-events-auto flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-line bg-paper/95 px-4 py-3 shadow-sm backdrop-blur">
+          <span className="text-sm text-ink">
+            Show saved projections
+            <span className="ml-1 text-ink-faint">({savedCount})</span>
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={showSavedProjections}
+            onClick={onToggleSavedProjections}
+            className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-primary-wash ${
+              showSavedProjections ? 'bg-primary' : 'bg-line'
+            }`}
+          >
+            <span
+              className={`inline-block h-4 w-4 rounded-full bg-paper shadow-sm transition-transform duration-150 ${
+                showSavedProjections ? 'translate-x-4' : 'translate-x-1'
+              }`}
+            />
+          </button>
+        </label>
+      )}
     </div>
   )
 }
@@ -419,51 +682,191 @@ function bearingLabel(deg) {
   return dirs[Math.round(deg / 45) % 8]
 }
 
-// Live Phase-3 metrics from the shared ray pass, plus a soft sanity check
-// against the Gendarmenmarkt Grasshopper reference values when that site is
-// selected (see GENDARMENMARKT_REFERENCE above — not a strict validation,
-// since the original vantage point/direction weren't recorded).
-function MetricsPanel({ result, site }) {
-  const ref = site.id === GENDARMENMARKT_REFERENCE.siteId ? GENDARMENMARKT_REFERENCE : null
-
+// Live Phase-3 metrics from the shared ray pass.
+function MetricsPanel({ result }) {
   return (
-    <div className="pointer-events-auto rounded border border-line bg-bg/95 p-4 text-sm shadow-sm backdrop-blur">
+    <div className="pointer-events-auto rounded-xl border border-line bg-paper/95 p-4 text-sm shadow-sm backdrop-blur">
       <p className="mb-2 flex items-baseline justify-between border-b border-line pb-1.5">
         <span className="text-sm font-semibold text-ink">Isovist metrics</span>
-        <span className="font-mono text-[11px] text-primary">live</span>
+        <span className="font-mono text-xs text-primary">live</span>
       </p>
       <dl className="divide-y divide-line/60 font-mono text-xs text-ink">
-        <MetricRow label="Area" value={`${result.area.toFixed(1)} m²`} refValue={ref && `${ref.area.toFixed(1)} m²`} />
-        <MetricRow label="Compactness" value={result.compactness.toFixed(4)} refValue={ref && ref.compactness.toFixed(4)} />
-        <MetricRow
-          label="Occlusivity"
-          value={`${result.occlusivity.toFixed(1)} m`}
-          refValue={ref && `${ref.occlusivity.toFixed(1)} m`}
-        />
-        <MetricRow
-          label="Enclosure ratio"
-          value={result.enclosureRatio.toFixed(4)}
-          refValue={ref && ref.enclosureRatio.toFixed(4)}
-        />
+        <MetricRow label="Area" value={`${result.area.toFixed(1)} m²`} />
+        <MetricRow label="Compactness" value={result.compactness.toFixed(4)} />
+        <MetricRow label="Occlusivity" value={`${result.occlusivity.toFixed(1)} m`} />
+        <MetricRow label="Enclosure ratio" value={result.enclosureRatio.toFixed(4)} />
       </dl>
-      {ref && (
-        <p className="mt-2 text-xs text-ink-faint">
-          Reference values are from the original Grasshopper run at an unrecorded vantage
-          point/direction — treat as a rough sanity check, not an exact match.
-        </p>
-      )}
     </div>
   )
 }
 
-function MetricRow({ label, value, refValue }) {
+function MetricRow({ label, value }) {
   return (
     <div className="flex items-baseline justify-between gap-2 py-1">
       <dt className="text-ink-muted">{label}</dt>
-      <dd className="text-right">
-        {value}
-        {refValue && <span className="ml-1.5 text-ink-faint">(ref {refValue})</span>}
-      </dd>
+      <dd className="text-right">{value}</dd>
     </div>
   )
+}
+
+// Rounds to `decimals` places and returns a Number (drops trailing zeros), so
+// the saved record and the CSV carry clean numeric values.
+function round(v, decimals) {
+  const f = 10 ** decimals
+  return Math.round(v * f) / f
+}
+
+// Escapes one CSV cell: wraps in quotes and doubles any embedded quotes when the
+// value contains a comma, quote, or newline.
+function csvCell(value) {
+  const s = value == null ? '' : String(value)
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+const RESULT_COLUMNS = [
+  'id',
+  'site_id',
+  'site_name',
+  'lat',
+  'lng',
+  'local_x',
+  'local_y',
+  'direction_deg',
+  'area_m2',
+  'compactness',
+  'occlusivity_m',
+  'enclosure_ratio',
+  'saved_at',
+]
+
+// Client-side CSV download of every saved result (ignores the active filter).
+function exportResultsCsv(results) {
+  const header = RESULT_COLUMNS.join(',')
+  const rows = results.map((r) => RESULT_COLUMNS.map((c) => csvCell(r[c])).join(','))
+  const csv = [header, ...rows].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'isovist-results.csv'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// Bottom-left log of saved isovist readings. Collapsed to a single bar by
+// default so it never crowds the metrics stack; expands into a scrollable
+// table with a per-site filter, plus Load/Delete on each row.
+function SavedResultsPanel({ results, onDelete, onLoad }) {
+  const [open, setOpen] = useState(false)
+  const [filter, setFilter] = useState('all')
+
+  // Distinct sites that actually have saved entries, for the filter dropdown.
+  const filterSites = useMemo(() => {
+    const seen = new Map()
+    for (const r of results) if (!seen.has(r.site_id)) seen.set(r.site_id, r.site_name)
+    return [...seen].map(([id, name]) => ({ id, name }))
+  }, [results])
+
+  const visible = filter === 'all' ? results : results.filter((r) => r.site_id === filter)
+
+  return (
+    <div className="pointer-events-none absolute bottom-4 left-4 w-[42rem] max-w-[calc(100%-2rem)]">
+      <div className="pointer-events-auto rounded-xl border border-line bg-paper/95 shadow-sm backdrop-blur">
+        <div className="flex items-center justify-between gap-2 px-4 py-2.5">
+          <button
+            onClick={() => setOpen((v) => !v)}
+            className="flex items-baseline gap-2 outline-none focus-visible:ring-2 focus-visible:ring-primary-wash"
+          >
+            <span className="font-mono text-xs text-ink-muted">{open ? '▾' : '▸'}</span>
+            <span className="text-sm font-semibold text-ink">Saved results</span>
+            <span className="font-mono text-xs text-ink-faint">{results.length}</span>
+          </button>
+          {open && results.length > 0 && (
+            <div className="flex items-center gap-2">
+              <select
+                className="input py-1 text-xs"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+              >
+                <option value="all">All sites</option>
+                {filterSites.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => exportResultsCsv(results)}
+                className="rounded-full border border-line-strong bg-paper px-2.5 py-1 text-xs text-ink-muted shadow-sm transition-colors duration-150 hover:border-primary hover:text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary-wash"
+              >
+                Export CSV
+              </button>
+            </div>
+          )}
+        </div>
+
+        {open && (
+          <div className="border-t border-line px-2 pb-2">
+            {results.length === 0 ? (
+              <p className="px-2 py-3 text-xs text-ink-faint">
+                No saved results yet. Place a viewpoint, aim it, then use “Save result”.
+              </p>
+            ) : (
+              <div className="max-h-56 overflow-auto">
+                <table className="w-full border-collapse font-mono text-xs text-ink">
+                  <thead>
+                    <tr className="text-left text-ink-muted">
+                      <th className="whitespace-nowrap px-2 py-1 font-medium">Plaza</th>
+                      <th className="whitespace-nowrap px-2 py-1 text-right font-medium">Area m²</th>
+                      <th className="whitespace-nowrap px-2 py-1 text-right font-medium">Compact.</th>
+                      <th className="whitespace-nowrap px-2 py-1 text-right font-medium">Occl. m</th>
+                      <th className="whitespace-nowrap px-2 py-1 text-right font-medium">Encl.</th>
+                      <th className="whitespace-nowrap px-2 py-1 text-right font-medium">Dir°</th>
+                      <th className="whitespace-nowrap px-2 py-1 font-medium">Saved</th>
+                      <th className="px-2 py-1 font-medium"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visible.map((r) => (
+                      <tr key={r.id} className="border-t border-line/60">
+                        <td className="whitespace-nowrap px-2 py-1 font-sans text-ink">{r.site_name}</td>
+                        <td className="whitespace-nowrap px-2 py-1 text-right">{r.area_m2.toFixed(2)}</td>
+                        <td className="whitespace-nowrap px-2 py-1 text-right">{r.compactness.toFixed(4)}</td>
+                        <td className="whitespace-nowrap px-2 py-1 text-right">{r.occlusivity_m.toFixed(2)}</td>
+                        <td className="whitespace-nowrap px-2 py-1 text-right">{r.enclosure_ratio.toFixed(4)}</td>
+                        <td className="whitespace-nowrap px-2 py-1 text-right">{r.direction_deg.toFixed(1)}</td>
+                        <td className="whitespace-nowrap px-2 py-1 text-ink-muted">{formatSavedAt(r.saved_at)}</td>
+                        <td className="px-2 py-1 text-right whitespace-nowrap">
+                          <button
+                            onClick={() => onLoad(r)}
+                            className="text-primary transition-colors duration-150 hover:text-primary-deep outline-none focus-visible:ring-2 focus-visible:ring-primary-wash"
+                          >
+                            Load
+                          </button>
+                          <span className="px-1 text-line-strong">·</span>
+                          <button
+                            onClick={() => onDelete(r.id)}
+                            className="text-redline transition-colors duration-150 hover:underline outline-none focus-visible:ring-2 focus-visible:ring-redline-wash"
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Compact local timestamp for the table (the full ISO string lives in the CSV).
+function formatSavedAt(iso) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }

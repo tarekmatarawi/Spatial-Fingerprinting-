@@ -22,7 +22,7 @@ Tech stack: React + Three.js for the 3D viewer; backend architecture for survey 
 
 ## Design System
 
-The frontend carries a "drafting instrument" visual identity, established via `/impeccable init` — see [PRODUCT.md](../PRODUCT.md) for the full brief. White paper surfaces, deep indigo as the brand/technical-pen color, redline red reserved for markup (viewpoint marker, warnings, wall hits), IBM Plex Sans/Mono typography. Every subsequent phase's UI (survey, results dashboard) should extend this system rather than introduce new visual language — keep the researcher's dense working surfaces and the single-task participant survey feeling like the same family at different densities.
+The frontend carries a "drafting instrument" visual identity — see [PRODUCT.md](../PRODUCT.md) for the full brief — re-based on the environment-settings design tokens (July 2026). Warm cream paper surfaces (`#F4F2EC` page / `#EAE6DB` panels), near-black ink, and orange as the technical-pen brand color: the reference's `#F97316`/`#EA580C` carries graphic accents (progress bars, selection rings, isovist fill) while text and buttons use a darker AA-safe cut of the same hue. Redline red stays reserved for markup (viewpoint marker, warnings, wall hits). Typography is Inter for UI text and JetBrains Mono for data/coordinates/labels; primary actions are pill-shaped, cards/panels rounded. All tokens live in `src/index.css` as OKLCH `--color-*` variables. Every subsequent phase's UI (results dashboard) should extend this system rather than introduce new visual language — keep the researcher's dense working surfaces and the single-task participant survey feeling like the same family at different densities.
 
 ---
 
