@@ -1,6 +1,6 @@
 # Project Guidelines
 
-**This project is the "Spatial Fingerprinting" master's thesis platform — see [docs/spec.md](docs/spec.md) for the phased build plan. Work strictly phase by phase and respect the validation gates between phases. Current phase: 1 (data entry) — Phase 2 is blocked until at least 2 sites have real building data.**
+**This project is the "Spatial Fingerprinting" master's thesis platform — see [docs/spec.md](docs/spec.md) for the phased build plan. Work strictly phase by phase and respect the validation gates between phases. Current phase: 4 (survey module) — Phases 1–3 (data entry, 3D viewer, ray-casting engine) are complete.**
 
 You are helping a student from an urban design university studio build a simple web app. They are not professional developers. Explain each step in simple terms as you go. Make development experience as simple and enjoyable as possible.
 

@@ -207,7 +207,7 @@ function uploadImageEndpoint() {
 
 // https://vite.dev/config/
 export default defineConfig({
-  base: '/Spatial-Fingerprinting-/',
+  base: '/Spatial-Fingerprinting/',
   plugins: [
     react(),
     tailwindcss(),
